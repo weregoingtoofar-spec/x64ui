@@ -1,3 +1,4 @@
+-- Check for table that is shared between executions.
 if not shared then
 	return warn("No shared, no script.")
 end
@@ -10,67 +11,72 @@ getfenv().PP_SCRAMBLE_NUM = getfenv().PP_SCRAMBLE_NUM or function(...) return ..
 getfenv().PP_SCRAMBLE_STR = getfenv().PP_SCRAMBLE_STR or function(...) return ... end
 getfenv().PP_SCRAMBLE_RE_NUM = getfenv().PP_SCRAMBLE_RE_NUM or function(...) return ... end
 
-local SOURCE_URL = "https://raw.githubusercontent.com/territorialism/x64ui/main/main.luau"
+-- Constants.
+local SOURCE_URL = "https://raw.githubusercontent.com/weregoingtoofar-spec/x64ui/refs/heads/main/main.luau"
 local REQUIRED_MARKERS = {
-	"local X64UI =",
+	"Version = \"1.0.1\"",
 	"function X64UI:CreateWindow",
 	"function X64UI:CreateDebuggerWindow",
 	"function Window:AddCPUView",
 }
 
----Report a loader failure with a traceback.
----@param error string
-local function onLoadError(error)
+---Report a loader failure with its traceback.
+---@param errorMessage string
+local function onLoadError(errorMessage)
 	warn("[x64ui] failed to initialize")
-	warn(tostring(error))
-	if debug and debug.traceback then warn(debug.traceback()) end
+	warn(tostring(errorMessage))
+	warn(debug.traceback())
 end
 
----Resolve the executor request implementation.
-local function getRequestClient()
-	if type(request) == "function" then return request end
-	if type(syn) == "table" and type(syn.request) == "function" then return syn.request end
-	if type(http) == "table" and type(http.request) == "function" then return http.request end
-	if type(http_request) == "function" then return http_request end
-	return nil
-end
-
----Fetch the complete library with request first.
+---Download the current full library through the executor request API.
+---@return string
 local function fetchSource()
-	local client = getRequestClient()
-	if client then
-		local ok, response = pcall(client, {
-			Url = SOURCE_URL .. "?v=" .. tostring(os.time()),
-			Method = "GET",
-			Headers = { ["Accept"] = "text/plain", ["Cache-Control"] = "no-cache" },
-		})
-		if ok and type(response) == "table" then
-			local status = tonumber(response.StatusCode) or 0
-			if status >= 200 and status < 300 and type(response.Body) == "string" and response.Body ~= "" then
-				return response.Body
-			end
+	if type(request) ~= "function" then
+		error("custom request function is unavailable")
+	end
+
+	local response = request({
+		Url = SOURCE_URL .. "?v=" .. tostring(os.time()),
+		Method = "GET",
+		Headers = {
+			["Accept"] = "text/plain",
+			["Cache-Control"] = "no-cache",
+		},
+	})
+	local statusCode = type(response) == "table" and tonumber(response.StatusCode) or 0
+	if statusCode < 200 or statusCode >= 300 then
+		error("main.luau request failed with status " .. tostring(statusCode))
+	end
+	if type(response.Body) ~= "string" or response.Body == "" then
+		error("main.luau returned an empty body")
+	end
+	return response.Body
+end
+
+---Compile and verify the requested x64ui build.
+---@return table
+local function initializeLibrary()
+	local source = fetchSource()
+	if #source < 150000 then
+		error("downloaded main.luau is truncated")
+	end
+	for _, marker in ipairs(REQUIRED_MARKERS) do
+		if not source:find(marker, 1, true) then
+			error("main.luau is stale or incompatible: missing " .. marker)
 		end
 	end
-	local ok, source = pcall(function() return game:HttpGet(SOURCE_URL, true) end)
-	if ok and type(source) == "string" and source ~= "" then return source end
-	error("request failed for main.luau")
-end
 
-local function initialize()
-	local source = fetchSource()
-	if #source < 100000 then error("downloaded source is truncated") end
-	for _, marker in ipairs(REQUIRED_MARKERS) do
-		if not source:find(marker, 1, true) then error("source is missing marker: " .. marker) end
+	local chunk, compileError = loadstring(source, "x64ui/main.luau")
+	if not chunk then
+		error("compile error: " .. tostring(compileError))
 	end
-	local compiler = loadstring or load
-	if type(compiler) ~= "function" then error("loadstring is unavailable") end
-	local chunk, compileError = compiler(source, "x64ui/main.luau")
-	if not chunk then error("compile error: " .. tostring(compileError)) end
 	local library = chunk()
-	if type(library) ~= "table" or type(library.CreateDebuggerWindow) ~= "function" then error("invalid library result") end
+	if type(library) ~= "table" or type(library.CreateDebuggerWindow) ~= "function" then
+		error("main.luau returned an incompatible library")
+	end
 	return library
 end
 
-local ok, library = xpcall(initialize, onLoadError)
-if ok then return library end
-return nil
+local success, library = xpcall(initializeLibrary, onLoadError)
+if not success then return nil end
+return library
