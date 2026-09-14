@@ -10,26 +10,55 @@ getfenv().PP_SCRAMBLE_NUM = getfenv().PP_SCRAMBLE_NUM or function(...) return ..
 getfenv().PP_SCRAMBLE_STR = getfenv().PP_SCRAMBLE_STR or function(...) return ... end
 getfenv().PP_SCRAMBLE_RE_NUM = getfenv().PP_SCRAMBLE_RE_NUM or function(...) return ... end
 
-local LOADER_URL = "https://raw.githubusercontent.com/territorialism/x64ui/main/loader.luau"
+-- Constants.
+local LOADER_URL = "https://raw.githubusercontent.com/weregoingtoofar-spec/x64ui/refs/heads/main/loader.luau"
 
+---Report a library loading failure.
+---@param errorMessage string
+local function onLoadError(errorMessage)
+	warn("[example] unable to load x64ui")
+	warn(tostring(errorMessage))
+	warn(debug.traceback())
+end
+
+---Load and verify the matching repository build.
+---@return table?
 local function loadLibrary()
-	local source
-	if type(request) == "function" then
-		local ok, response = pcall(request, { Url = LOADER_URL, Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } })
-		if ok and type(response) == "table" and (tonumber(response.StatusCode) or 0) >= 200 and (tonumber(response.StatusCode) or 0) < 300 then source = response.Body end
+	if type(request) ~= "function" then
+		onLoadError("custom request function is unavailable")
+		return nil
 	end
-	if not source then
-		local ok, result = pcall(function() return game:HttpGet(LOADER_URL, true) end)
-		if ok then source = result end
+
+	local response = request({
+		Url = LOADER_URL .. "?v=" .. tostring(os.time()),
+		Method = "GET",
+		Headers = {
+			["Accept"] = "text/plain",
+			["Cache-Control"] = "no-cache",
+		},
+	})
+	local statusCode = type(response) == "table" and tonumber(response.StatusCode) or 0
+	if statusCode < 200 or statusCode >= 300 then
+		onLoadError("loader request failed with status " .. tostring(statusCode))
+		return nil
 	end
-	if type(source) ~= "string" then return nil end
-	local chunk, compileError = loadstring(source, "x64ui/loader.luau")
-	if not chunk then warn(compileError) return nil end
-	return chunk()
+
+	local chunk, compileError = loadstring(response.Body, "x64ui/loader.luau")
+	if not chunk then
+		onLoadError("loader compile error: " .. tostring(compileError))
+		return nil
+	end
+	local success, library = xpcall(chunk, onLoadError)
+	if not success or type(library) ~= "table" then return nil end
+	if library.Version ~= "1.0.1" or type(library.CreateDebuggerWindow) ~= "function" then
+		onLoadError("stale or incompatible x64ui build loaded")
+		return nil
+	end
+	return library
 end
 
 local X64UI = loadLibrary()
-if not X64UI then return warn("[example] unable to load x64ui") end
+if not X64UI then return end
 
 local cpu = {
 	Info = "RIP points to demo.main+0x19 · branch destination: demo.main+0x31",
