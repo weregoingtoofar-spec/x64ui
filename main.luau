@@ -18,7 +18,7 @@ getfenv().PP_SCRAMBLE_STR = getfenv().PP_SCRAMBLE_STR or function(...) return ..
 getfenv().PP_SCRAMBLE_RE_NUM = getfenv().PP_SCRAMBLE_RE_NUM or function(...) return ... end
 
 local X64UI = {
-	Version = "1.0.0-d",
+	Version = "1.0.1",
 	MenuKeybind = Enum.KeyCode.RightShift,
 	Windows = {},
 	ActiveWindow = nil,
